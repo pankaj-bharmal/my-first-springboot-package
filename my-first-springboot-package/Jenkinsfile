@@ -1,45 +1,78 @@
-pipeline { 
+pipeline {
     agent any
+
     tools {
-        maven 'maven' 
+        maven 'maven'   // Must match the Maven tool name in Jenkins global config
     }
+
     environment {
-        DATE = new Date().format('yy.M')
-        TAG = "${DATE}.${BUILD_NUMBER}"
+        DATE = "${new Date().format('yy.MM')}"
+        TAG  = "${DATE}.${BUILD_NUMBER}"
+        IMAGE_NAME = "localhost:5000/my-first-springboot-app"
+        CONTAINER_NAME = "my-first-springboot-app"
     }
+
     stages {
-        stage ('Build') {
+
+        stage('Checkout Package Repo') {
             steps {
-            	fileOperations([ folderCopyOperation(sourceFolderPath:'my-first-springboot/src',destinationFolderPath: 'src') ])
-            	
-                sh 'mvn clean package'
+                echo "Package repo is already checked out"
             }
-        }
-        stage('Docker Build') {
-            steps {
-				script {
-		            docker.withRegistry('https://localhost:5000') {
-						dockerImage = docker.build("my-first-springboot-app:${TAG}")
-		                dockerImage.push()
-		            }
-				}
-			}
         }
 
-        stage('Deploy'){
+        stage('Checkout App Source') {
             steps {
-            
-            	script {
-                    docker.withServer('tcp://localhost:2375') {
-                        echo 'Deploying on target'
-		                sh "docker stop my-first-springboot-app | true"
-		                sh "docker rm my-first-springboot-app | true"
-		                sh "docker pull  localhost:5000/my-first-springboot-app:${TAG}"
-		                sh "docker run -e TZ=Asia/Calcutta   --log-opt max-size=100m  --name my-first-springboot-app -d -v /var/log/etpsapp/logs:/applog:z -v /var/log/etpsapp:/var/log/etpsapp:z -p 7091:7091 -p 9011:8080 --restart=always localhost:5000/my-first-springboot-app:${TAG}"
-                    }    
+                dir('app-src') {
+                    git branch: 'main',
+                        url: 'https://github.com/pankaj-bharmal/my-first-springboot.git'
                 }
-            
             }
+        }
+
+        stage('Build Maven') {
+            steps {
+                dir('app-src') {
+                    sh 'mvn clean package -DskipTests'
+                }
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    // Build Docker image using Dockerfile in package repo (root)
+                    def image = docker.build("${IMAGE_NAME}:${TAG}", ".")
+                    image.push()
+                    image.push("latest")
+                }
+            }
+        }
+
+        stage('Deploy Container') {
+            steps {
+                sh '''
+                docker stop ${CONTAINER_NAME} || true
+                docker rm ${CONTAINER_NAME} || true
+
+                docker pull ${IMAGE_NAME}:${TAG}
+
+                docker run -d \
+                  --name ${CONTAINER_NAME} \
+                  -e TZ=Asia/Calcutta \
+                  -p 9011:8080 \
+                  --restart=always \
+                  ${IMAGE_NAME}:${TAG}
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "🚀 Deployment successful with tag ${TAG}"
+        }
+        failure {
+            echo "❌ Pipeline failed"
         }
     }
 }
