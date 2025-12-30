@@ -1,0 +1,45 @@
+pipeline { 
+    agent any
+    tools {
+        maven 'maven' 
+    }
+    environment {
+        DATE = new Date().format('yy.M')
+        TAG = "${DATE}.${BUILD_NUMBER}"
+    }
+    stages {
+        stage ('Build') {
+            steps {
+            	fileOperations([ folderCopyOperation(sourceFolderPath:'my-first-springboot/src',destinationFolderPath: 'src') ])
+            	
+                sh 'mvn clean package'
+            }
+        }
+        stage('Docker Build') {
+            steps {
+				script {
+		            docker.withRegistry('https://localhost:5000') {
+						dockerImage = docker.build("my-first-springboot-app:${TAG}")
+		                dockerImage.push()
+		            }
+				}
+			}
+        }
+
+        stage('Deploy'){
+            steps {
+            
+            	script {
+                    docker.withServer('tcp://localhost:2375') {
+                        echo 'Deploying on target'
+		                sh "docker stop my-first-springboot-app | true"
+		                sh "docker rm my-first-springboot-app | true"
+		                sh "docker pull  localhost:5000/my-first-springboot-app:${TAG}"
+		                sh "docker run -e TZ=Asia/Calcutta   --log-opt max-size=100m  --name my-first-springboot-app -d -v /var/log/etpsapp/logs:/applog:z -v /var/log/etpsapp:/var/log/etpsapp:z -p 7091:7091 -p 9011:8080 --restart=always localhost:5000/my-first-springboot-app:${TAG}"
+                    }    
+                }
+            
+            }
+        }
+    }
+}
